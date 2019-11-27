@@ -73,6 +73,8 @@
       #getChildFolders($doc $data)
     #elseif ($request.data == 'allFiles')
       #getAllFiles
+    #elseif ($request.data == 'wikiFiles')
+      #getWikiFiles
     #elseif ($request.data == 'orphanFolders')
       #getOrphanFolders($data)
     #elseif ($request.data == 'orphanFiles')
@@ -161,8 +163,8 @@
 
 #macro (getAllFiles)
   #set ($parameters = {'space': $doc.space})
-  #getFilesStatement('' 'doc.space = :space' $parameters $statement)
-  #getFiles($statement $parameters $data)
+  #getFilesStatement('' '' 'doc.space = :space' $parameters $statement false)
+  #getFiles($statement $parameters $data false)
   ## We want to show the path to a file in the livetable only for All Files view, in case the same file name exists
   ## in different folders.
   #foreach ($item in $data['list'])
@@ -170,12 +172,26 @@
   #end
 #end
 
+#macro (getWikiFiles $wiki)
+  #set ($parameters = {})
+  #set ($select = 'select doc.fullName, attach')
+  #set ($from = 'from XWikiDocument doc')
+  #getFilesStatement($select $from '' $parameters $statement true)
+  ##set ($statement = "select doc.fullName, attach from XWikiDocument doc, XWikiAttachment attach where attach.docId = doc.id order by attach.filename")
+  #getFiles($statement $parameters $data true)
+  #foreach ($item in $data['list'])
+    #set ($discard = $item.put('showFolders', true))
+    #set ($discard = $item.put('wiki', true))
+  #end
+#end
+
+
 #macro (getOrphanFiles)
   ## A file can have multiple parent folders, which are declared using tags, and one of these parent folders, usually
   ## the first, is set as wiki page parent so that a tree widget (such as the XWiki explorer tree) can still display the
   ## hierarchy nicely.
   #set ($parameters = {'space': $doc.space, 'parent': $doc.fullName})
-  #getFilesStatement('' "doc.space = :space and $hasNoParent" $parameters $statement)
+  #getFilesStatement('' '' "doc.space = :space and $hasNoParent" $parameters $statement)
   #getFiles($statement $parameters $data)
 #end
 
@@ -746,7 +762,7 @@ require(['jquery', 'angular', 'JobRunner', 'angular-resource', 'angular-ui-boots
   }
 
   driveServices.factory('Drive', ['$resource', function($resource) {
-    var data = ['folders', 'allFiles', 'orphanFolders', 'orphanFiles', 'activeJobs', 'jobStatus'];
+    var data = ['folders', 'allFiles', 'orphanFolders', 'orphanFiles', 'activeJobs', 'jobStatus', 'wikiFiles'];
     var actions = ['createFolder', 'move', 'copy', 'delete', 'download'];
     var api = createAPI(data, actions);
     api.getActiveJobs.isArray = true;
@@ -1596,6 +1612,9 @@ require(['jquery', 'angular', 'JobRunner', 'angular-resource', 'angular-ui-boots
         scope.type = attrs.type || icon.type || 'Attachment';
         scope.$watch('file.id', function(newValue, oldValue) {
           scope.url = scope.file.id &amp;&amp; scope.file.name ? new XWiki.Document(scope.file.id).getURL() : null;
+          if (scope.file.wiki) {
+            scope.url = decodeURIComponent(scope.file.url);
+          }
         });
         if (scope.file.paths) {
           scope.file.folders = getFolders(scope.file.paths[0]);
@@ -2475,6 +2494,8 @@ require(['jquery', 'angular', 'JobRunner', 'angular-resource', 'angular-ui-boots
           return asSource(Drive.getAllFiles);
         } else if (locationId == '/orphanFiles') {
           return asSource(Drive.getOrphanFiles);
+        } else if (locationId == '/wikiFiles') {
+          return asSource(Drive.getWikiFiles);
         } else {
           var folder = Folder.bind({page: locationId});
           return asSource($.proxy(folder.getFiles, folder));

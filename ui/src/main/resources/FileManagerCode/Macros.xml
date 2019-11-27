@@ -220,18 +220,24 @@
   #end
 #end
 
-#macro (getFilesStatement $from $where $parameters $return)
-  #set ($from = ", BaseObject as fileObj#if (""$!from"" != ''), $!from#end")
-  #set ($joinFiles = "fileObj.className = 'FileManagerCode.FileClass' and fileObj.name = doc.fullName")
-  #set ($where = "$joinFiles#if (""$!where"" != '') and $!where#end")
+## wiki parameter is for showing attachments from the entire wiki.
+#macro (getFilesStatement $select $from $where $parameters $return $wiki)
+  #if ($from != '' &amp;&amp; $select == '')
+    #set ($select = ",")
+  #end
   #set ($joinAttachments = false)
+  #if (!$wiki)
+    #set ($from = "$!from, BaseObject as fileObj")
+    #set ($joinFiles = "fileObj.className = 'FileManagerCode.FileClass' and fileObj.name = doc.fullName")
+    #set ($where = "$!where and $joinFiles")
+  #end
   #set ($storedColumns = {
     'name': 'attach.filename',
     'size': 'attach.filesize',
     'creationDate': 'doc.creationDate',
     'date': 'doc.date',
     'creator': 'doc.creator',
-    'author': 'doc.author'
+    'author': 'attach.author'
   })
   #foreach ($entry in $storedColumns.entrySet())
     #set ($filterValue = $request.getParameter(".$entry.key"))
@@ -275,14 +281,14 @@
     #set ($where = "where $stringtool.removeStart($where.trim(), 'and ')")
   #end
   #set ($return = $NULL)
-  #setVariable("$return" "$from $!where $orderBy")
+  #setVariable("$return" "$select $from $!where $orderBy")
 #end
 
 #macro (getChildFiles $parentDoc $return)
   #set ($parameters = {'space': $parentDoc.space, 'tag': $parentDoc.documentReference.name})
   #set ($fromTags = 'BaseObject as tagObj, DBStringListProperty as tagsProp')
   #set ($joinTags = "tagObj.className = 'XWiki.TagClass' and tagObj.name = doc.fullName and tagObj.id = tagsProp.id.id and tagsProp.id.name = 'tags'")
-  #getFilesStatement($fromTags "doc.space = :space and $joinTags and :tag in elements(tagsProp.list)"
+  #getFilesStatement('' $fromTags "doc.space = :space and $joinTags and :tag in elements(tagsProp.list)"
     $parameters $statement)
   #getFiles($statement $parameters $_return)
   #set ($return = $NULL)
@@ -293,7 +299,7 @@
   ## A file can have multiple parent folders, which are declared using tags, and one of these parent folders, usually
   ## the first, is set as wiki page parent so that a tree widget (such as the XWiki explorer tree) can still display the
   ## hierarchy nicely.
-  #getFilesStatement('' "doc.space = :space and $hasNoParent" $NULL $statement)
+  #getFilesStatement('' '' "doc.space = :space and $hasNoParent" $NULL $statement false)
   #set ($query = $services.query.hql($statement))
   #set ($query = $query.bindValue('space', $doc.space).bindValue('parent', $doc.fullName))
   #set ($results = $query.setLimit(1).execute())
@@ -301,7 +307,8 @@
   #setVariable("$return" $results.size().equals(1))
 #end
 
-#macro (getFiles $statement $parameters $return)
+## $wiki parameter is for getWikiFiles request.
+#macro (getFiles $statement $parameters $return $wiki)
   #set ($query = $services.query.hql($statement))
   #foreach ($entry in $parameters.entrySet())
     #set ($discard = $query.bindValue($entry.key, $entry.value))
@@ -316,11 +323,20 @@
   #if ($limit)
     #set ($discard = $query.setLimit($limit))
   #end
-  #foreach ($fileId in $query.execute())
-    #set ($fileDoc = $xwiki.getDocument($fileId))
+  #foreach ($fileResult in $query.execute())
+    #if ($wiki == true)
+      #set ($fileDoc = $xwiki.getDocument($fileResult[0]))
+      #set ($attach = $fileResult[1])
+    #else
+      #set ($fileDoc = $xwiki.getDocument($fileResult))
+    #end
     #if ($fileDoc)
-      #getFile($fileDoc $file)
-      #set ($discard = $files.add($file))
+      #if ($wiki == false)
+        #getFile($fileDoc $file)
+        #set ($discard = $files.add($file))
+      #else
+        #getAttachFile($attach $fileDoc $files)
+      #end
     #else
       ## The current user doesn't have the right to view this file.
       #set ($discard = $files.add({}))
@@ -333,6 +349,32 @@
     'limit': $limit,
     'list': $files
   })
+#end
+
+#macro (getAttachFile $attach $fileDoc $files)
+  #getFilePaths($fileDoc $paths)
+  #set ($canDeleteFileDoc = $fileDoc.hasAccessLevel('delete'))
+  #set ($return = $NULL)
+  #set($return = {
+    'id': $attach.filename,
+    'url': $escapetool.url($xwiki.getDocument($fileDoc.documentReference).getURL()),
+    'name': $attach.filename,
+    'creationDate': $fileDoc.creationDate,
+    'date': $fileDoc.date,
+    'creator': $attach.author,
+    'author': $attach.author,
+    'size': $attach.filesize,
+    'mediaType': $attach.mimeType,
+    'version': $attach.version,
+    'description': $fileDoc.display('description'),
+    'paths': $paths,
+    'canRename': $canDeleteFileDoc,
+    'canDelete': $canDeleteFileDoc,
+    'canMove': $canDeleteFileDoc,
+    'canCopy': $hasCreatePage,
+    'canCreate': $hasCreatePage
+  })
+  #set ($discard = $files.add($return))
 #end
 
 #macro (getFile $fileDoc $return)
@@ -369,7 +411,7 @@
   })
 #end
 
-#macro (getFilePaths $fileDoc $return)
+#macro (getFilePaths $fileDoc $return $wiki)
   #set ($tags = $fileDoc.getObject('XWiki.TagClass').getProperty('tags').value)
   #set ($_paths = [])
   #if ($tags &amp;&amp; $tags.size() &gt; 0)
@@ -385,6 +427,13 @@
         #set ($discard = $_paths.add($path))
       #end
     #end
+  #elseif ($wiki == true)
+    #set ($spaces = $fileDoc.getFullName().split('\.'))
+    #set ($path = [])
+    #foreach ($space in $spaces)
+      #set ($discard = $path.add($space))
+    #end
+    #set ($discard = $_paths.add($path))
   #end
   #set ($return = $NULL)
   #setVariable("$return" $_paths)
